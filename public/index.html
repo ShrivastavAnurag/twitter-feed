@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tech Interview Feed</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg:      #0d0d0f;
+    --surface: #16161a;
+    --surf2:   #1e1e24;
+    --border:  #2a2a35;
+    --accent:  #5B5FEF;
+    --acc2:    #7c80ff;
+    --text:    #e8e8f0;
+    --muted:   #888899;
+    --green:   #3dd68c;
+    --teal:    #2dd4bf;
+    --red:     #f87171;
+    --yellow:  #f59e0b;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── HEADER ── */
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 14px 28px; display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo { font-family: 'Space Grotesk', sans-serif; font-size: 1.15rem; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+  .logo-icon { width: 30px; height: 30px; background: var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  .header-right { display: flex; align-items: center; gap: 14px; }
+  .last-scraped { font-size: 0.75rem; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+  .refresh-btn {
+    font-size: 0.78rem; font-family: 'JetBrains Mono', monospace;
+    background: var(--surf2); border: 1px solid var(--border); color: var(--muted);
+    padding: 5px 12px; border-radius: 6px; cursor: pointer; transition: all 0.15s;
+  }
+  .refresh-btn:hover { border-color: var(--accent); color: var(--acc2); }
+
+  /* ── MOCK BANNER ── */
+  .mock-banner {
+    display: none; background: #1a1a08; border-bottom: 1px solid #3a3a18;
+    padding: 9px 28px; font-size: 0.82rem; color: #d4b84a;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .mock-banner.show { display: flex; align-items: center; gap: 8px; }
+
+  /* ── TABS ── */
+  .tabs {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 28px; display: flex;
+  }
+  .tab-btn {
+    padding: 11px 20px; font-size: 0.87rem; font-family: 'Space Grotesk', sans-serif;
+    font-weight: 500; color: var(--muted); background: none; border: none;
+    border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.15s;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--acc2); border-bottom-color: var(--accent); }
+  .tab-count {
+    font-size: 0.7rem; font-family: 'JetBrains Mono', monospace;
+    background: var(--surf2); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 4px; transition: all 0.15s;
+  }
+  .tab-btn.active .tab-count { background: #1a1a3a; border-color: #3a3a6e; color: var(--acc2); }
+
+  /* ── CONTROLS ── */
+  .controls {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 11px 28px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+  }
+  .filter-group { display: flex; flex-direction: column; gap: 3px; }
+  .filter-label { font-size: 0.66rem; font-family: 'JetBrains Mono', monospace; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  select {
+    background: var(--surf2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 28px 6px 11px; border-radius: 7px; font-size: 0.83rem;
+    font-family: 'Inter', sans-serif; cursor: pointer; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888899' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 9px center;
+    min-width: 136px; transition: border-color 0.15s;
+  }
+  select:focus { outline: none; border-color: var(--accent); }
+  .search-wrap { flex: 1; min-width: 190px; display: flex; flex-direction: column; gap: 3px; }
+  .search-input {
+    background: var(--surf2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 13px; border-radius: 7px; font-size: 0.83rem;
+    font-family: 'Inter', sans-serif; width: 100%; transition: border-color 0.15s;
+  }
+  .search-input::placeholder { color: var(--muted); }
+  .search-input:focus { outline: none; border-color: var(--accent); }
+  .ctrl-btn {
+    background: var(--surf2); border: 1px solid var(--border); color: var(--muted);
+    padding: 6px 13px; border-radius: 7px; font-size: 0.81rem; cursor: pointer;
+    font-family: 'Inter', sans-serif; transition: all 0.15s; white-space: nowrap;
+  }
+  .ctrl-btn:hover, .ctrl-btn.active { border-color: var(--accent); color: var(--acc2); }
+
+  /* ── STATS ── */
+  .stats-bar {
+    padding: 6px 28px; font-size: 0.76rem; color: var(--muted);
+    font-family: 'JetBrains Mono', monospace; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+  .stats-bar span { color: var(--acc2); }
+  .sync-indicator {
+    font-size: 0.72rem; font-family: 'JetBrains Mono', monospace; color: var(--muted);
+    display: flex; align-items: center; gap: 5px; opacity: 0; transition: opacity 0.3s;
+  }
+  .sync-indicator.show { opacity: 1; }
+  .sync-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* ── LOADING ── */
+  .loader {
+    display: flex; align-items: center; justify-content: center;
+    padding: 80px 20px; gap: 12px; color: var(--muted);
+    font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;
+  }
+  .spinner {
+    width: 20px; height: 20px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── PANELS ── */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── TWEET CARDS ── */
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 15px; padding: 20px 28px; max-width: 1600px; margin: 0 auto;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; display: flex; flex-direction: column; gap: 11px;
+    transition: border-color 0.15s, transform 0.1s, opacity 0.2s;
+    animation: fadeIn 0.18s ease; position: relative;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .card:hover { border-color: #3a3a50; transform: translateY(-1px); }
+  .card.is-q { border-left: 3px solid var(--accent); }
+
+  /* status variants */
+  .card.status-read    { opacity: 0.45; }
+  .card.status-read:hover { opacity: 0.8; }
+  .card.status-review  { border-left: 3px solid var(--yellow) !important; }
+  .card.status-read .card-text { color: var(--muted); }
+
+  .card-hdr { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .handle {
+    font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 0.87rem;
+    color: var(--acc2); text-decoration: none; flex-shrink: 0;
+  }
+  .handle::before { content: "@"; color: var(--muted); font-weight: 400; margin-right: 1px; }
+  .hdr-right { display: flex; align-items: center; gap: 7px; }
+  .date { font-size: 0.72rem; font-family: 'JetBrains Mono', monospace; color: var(--muted); }
+
+  /* ── STATUS PILL ── */
+  .status-pill {
+    font-size: 0.68rem; font-family: 'JetBrains Mono', monospace;
+    padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border);
+    cursor: pointer; user-select: none; transition: all 0.15s; white-space: nowrap;
+    background: var(--surf2); color: var(--muted);
+  }
+  .status-pill:hover { border-color: var(--accent); color: var(--acc2); }
+  .status-pill.s-read   { background: #0e2010; border-color: #1e4020; color: var(--green); }
+  .status-pill.s-review { background: #201808; border-color: #40300e; color: var(--yellow); }
+
+  /* ── STATUS DROPDOWN ── */
+  .status-menu {
+    position: absolute; top: 44px; right: 16px; z-index: 50;
+    background: #1a1a22; border: 1px solid var(--border); border-radius: 9px;
+    padding: 5px; display: none; flex-direction: column; gap: 2px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5); min-width: 148px;
+  }
+  .status-menu.open { display: flex; }
+  .sm-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 6px; cursor: pointer;
+    font-size: 0.8rem; font-family: 'Inter', sans-serif; color: var(--text);
+    transition: background 0.1s; border: none; background: none; width: 100%; text-align: left;
+  }
+  .sm-item:hover { background: var(--surf2); }
+  .sm-item.active { color: var(--acc2); }
+  .sm-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .sm-dot.d-unread { background: var(--border); }
+  .sm-dot.d-read   { background: var(--green); }
+  .sm-dot.d-review { background: var(--yellow); }
+
+  .card-text { font-size: 0.86rem; line-height: 1.6; color: var(--text); flex: 1; }
+  .card-ftr { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 7px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag {
+    font-size: 0.7rem; font-family: 'JetBrains Mono', monospace;
+    padding: 2px 7px; border-radius: 4px; border: 1px solid #3a3a6e;
+    color: var(--acc2); background: #1a1a3a;
+  }
+  .q-badge {
+    font-size: 0.68rem; font-family: 'JetBrains Mono', monospace;
+    padding: 2px 6px; background: #0e1e38; color: #60a5fa;
+    border: 1px solid #1e3a68; border-radius: 4px;
+  }
+  .open-link {
+    font-size: 0.76rem; font-family: 'JetBrains Mono', monospace; color: var(--accent);
+    text-decoration: none; padding: 3px 9px; border: 1px solid #2a2a5a;
+    border-radius: 5px; background: #1a1a3a; transition: all 0.15s; white-space: nowrap;
+  }
+  .open-link:hover { background: var(--accent); color: #fff; }
+
+  /* ── Q&A CARDS ── */
+  .qa-list { display: flex; flex-direction: column; gap: 14px; padding: 20px 28px; max-width: 860px; margin: 0 auto; }
+  .qa-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 13px; overflow: visible; animation: fadeIn 0.18s ease;
+    transition: border-color 0.15s, opacity 0.2s; position: relative;
+  }
+  .qa-card:hover { border-color: #3a3a58; }
+  .qa-card.status-read   { opacity: 0.45; }
+  .qa-card.status-read:hover { opacity: 0.8; }
+  .qa-card.status-review { border-left: 3px solid var(--yellow); }
+
+  .qa-q { padding: 14px 18px; border-bottom: 1px solid var(--border); background: #111116; border-radius: 13px 13px 0 0; }
+  .qa-q-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; gap: 8px; }
+  .qa-q-who { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--muted); }
+  .qa-q-who::before { content: "❓ @"; }
+  .qa-q-text { font-size: 0.86rem; line-height: 1.55; color: #aaa8c4; }
+  .qa-a { padding: 14px 18px; }
+  .qa-a-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; gap: 8px; }
+  .qa-a-who {
+    font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 0.87rem;
+    color: var(--teal); text-decoration: none;
+  }
+  .qa-a-who::before { content: "@ "; color: var(--muted); font-weight: 400; }
+  .qa-a-text { font-size: 0.87rem; line-height: 1.62; color: var(--text); margin-bottom: 11px; }
+  .qa-ftr { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 7px; }
+
+  /* ── EMPTY ── */
+  .empty {
+    text-align: center; padding: 60px 20px; color: var(--muted);
+    font-family: 'Space Grotesk', sans-serif; grid-column: 1 / -1;
+  }
+  .empty-icon { font-size: 2.6rem; margin-bottom: 10px; }
+  .empty-title { font-size: 1rem; font-weight: 600; margin-bottom: 5px; color: var(--text); }
+
+  @media (max-width: 640px) {
+    header, .tabs, .controls, .stats-bar { padding-left: 14px; padding-right: 14px; }
+    .grid, .qa-list { padding: 12px 14px; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="logo-icon">⚡</div>Tech Interview Feed</div>
+  <div class="header-right">
+    <span class="last-scraped" id="lastScraped">Loading…</span>
+    <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
+  </div>
+</header>
+
+<div class="mock-banner" id="mockBanner">
+  ⚠ Showing demo data — KV store is empty. Trigger <code>/api/scrape</code> once to populate with live tweets.
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" id="tabTweets" onclick="switchTab('tweets')">
+    🐦 Tweets <span class="tab-count" id="cntTweets">—</span>
+  </button>
+  <button class="tab-btn" id="tabReplies" onclick="switchTab('replies')">
+    💬 Replies &amp; Answers <span class="tab-count" id="cntReplies">—</span>
+  </button>
+</div>
+
+<div class="controls">
+  <div class="filter-group">
+    <div class="filter-label">Handle</div>
+    <select id="fHandle" onchange="filter()">
+      <option value="">All accounts</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <div class="filter-label">Topic</div>
+    <select id="fTopic" onchange="filter()">
+      <option value="">All topics</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <div class="filter-label">Date</div>
+    <select id="fDate" onchange="filter()">
+      <option value="">All time</option>
+      <option value="1">Today</option>
+      <option value="7">Last 7 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="90">Last 3 months</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <div class="filter-label">Status</div>
+    <select id="fStatus" onchange="filter()">
+      <option value="">All</option>
+      <option value="unread">🔵 Unread</option>
+      <option value="review">🟡 Review later</option>
+      <option value="read">✅ Read</option>
+    </select>
+  </div>
+  <div class="search-wrap">
+    <div class="filter-label">Search</div>
+    <input class="search-input" id="fSearch" type="text" placeholder="Search…" oninput="filter()" />
+  </div>
+  <button class="ctrl-btn" id="btnQ" onclick="toggleQ()">❓ Questions only</button>
+  <button class="ctrl-btn" onclick="clearFilters()">✕ Clear</button>
+</div>
+
+<div class="stats-bar">
+  <div>Showing <span id="sVisible">—</span> of <span id="sTotal">—</span> items &nbsp;·&nbsp; refreshes daily at midnight UTC</div>
+  <div class="sync-indicator" id="syncIndicator"><div class="sync-dot"></div>Syncing…</div>
+</div>
+
+<div id="loaderArea" class="loader"><div class="spinner"></div>Fetching tweets…</div>
+
+<div class="panel" id="panel-tweets"><div class="grid" id="gridTweets"></div></div>
+<div class="panel" id="panel-replies"><div class="qa-list" id="listReplies"></div></div>
+
+<script>
+// ─────────────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────────────
+let ALL_TWEETS  = [];
+let ALL_REPLIES = [];
+let TAB         = 'tweets';
+let Q_ONLY      = false;
+
+// ─────────────────────────────────────────────
+//  STATUS STORE
+//  Shape: { "<itemId>": { status: "unread"|"read"|"review", ts: epochMs } }
+//  localStorage key: "tif_statuses"
+// ─────────────────────────────────────────────
+const LS_KEY = 'tif_statuses';
+
+function lsLoad() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); }
+  catch { return {}; }
+}
+function lsSave(map) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(map)); } catch {}
+}
+
+// Get status for an item ('unread' if not set)
+function getStatus(id) {
+  const map = lsLoad();
+  return (map[id] && map[id].status) || 'unread';
+}
+
+// Set status locally + fire-and-forget to KV
+function setStatus(id, status) {
+  const ts  = Date.now();
+  const map = lsLoad();
+  map[id]   = { status, ts };
+  lsSave(map);
+
+  // Sync to KV (background, no await)
+  showSyncing();
+  fetch('/api/status', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ id, status, ts }),
+  })
+  .then(() => hideSyncing())
+  .catch(() => hideSyncing());
+
+  // Re-render just this card without full re-filter
+  refreshCardStatus(id, status);
+  // If status filter is active, re-run full filter so card may disappear
+  if (document.getElementById('fStatus').value) filter();
+}
+
+// On page load: fetch KV statuses and merge (KV wins if ts is newer)
+async function syncFromKV() {
+  try {
+    const res  = await fetch('/api/status');
+    const data = await res.json();
+    if (!data.statuses) return;
+    const local  = lsLoad();
+    let changed  = false;
+    for (const [id, remote] of Object.entries(data.statuses)) {
+      const local_ts = (local[id] && local[id].ts) || 0;
+      if (remote.ts > local_ts) {
+        local[id] = remote;
+        changed   = true;
+      }
+    }
+    if (changed) {
+      lsSave(local);
+      filter(); // re-render with merged statuses
+    }
+  } catch {}
+}
+
+function showSyncing() {
+  document.getElementById('syncIndicator').classList.add('show');
+}
+function hideSyncing() {
+  setTimeout(() => document.getElementById('syncIndicator').classList.remove('show'), 800);
+}
+
+// ─────────────────────────────────────────────
+//  STATUS MENU (dropdown per card)
+// ─────────────────────────────────────────────
+let openMenuId = null;
+
+function openMenu(id, btnEl) {
+  // Close any open menu first
+  closeAllMenus();
+  const menu = document.getElementById('menu_' + id);
+  if (!menu) return;
+  menu.classList.add('open');
+  openMenuId = id;
+  // Highlight active item
+  const current = getStatus(id);
+  menu.querySelectorAll('.sm-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.s === current);
+  });
+  // Close on outside click
+  setTimeout(() => document.addEventListener('click', outsideClick), 0);
+}
+
+function closeAllMenus() {
+  document.querySelectorAll('.status-menu.open').forEach(m => m.classList.remove('open'));
+  document.removeEventListener('click', outsideClick);
+  openMenuId = null;
+}
+
+function outsideClick(e) {
+  if (!e.target.closest('.status-menu') && !e.target.closest('.status-pill')) closeAllMenus();
+}
+
+function pickStatus(id, status) {
+  closeAllMenus();
+  setStatus(id, status);
+}
+
+// Refresh just the pill + card class without re-rendering the whole grid
+function refreshCardStatus(id, status) {
+  const card = document.getElementById('card_' + id);
+  if (!card) return;
+  card.classList.remove('status-read', 'status-review', 'status-unread');
+  if (status !== 'unread') card.classList.add('status-' + status);
+  const pill = card.querySelector('.status-pill');
+  if (!pill) return;
+  pill.classList.remove('s-read', 's-review');
+  if (status === 'read')   { pill.textContent = '✅ Read';         pill.classList.add('s-read'); }
+  else if (status === 'review') { pill.textContent = '🟡 Review later'; pill.classList.add('s-review'); }
+  else                     { pill.textContent = '○ Mark'; }
+}
+
+// ─────────────────────────────────────────────
+//  DATA LOADING
+// ─────────────────────────────────────────────
+async function loadData() {
+  document.getElementById('loaderArea').style.display = 'flex';
+  document.getElementById('panel-tweets').classList.remove('active');
+  document.getElementById('panel-replies').classList.remove('active');
+  document.getElementById('lastScraped').textContent = 'Loading…';
+
+  try {
+    const res  = await fetch('/api/tweets');
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    ALL_TWEETS  = data.tweets  || [];
+    ALL_REPLIES = data.replies || [];
+
+    document.getElementById('mockBanner').classList.toggle('show', !!data.is_mock);
+
+    if (data.meta && data.meta.last_scraped) {
+      const d = new Date(data.meta.last_scraped);
+      document.getElementById('lastScraped').textContent =
+        'Scraped ' + d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+        + ' ' + d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) + ' UTC';
+    } else {
+      document.getElementById('lastScraped').textContent = 'Demo data';
+    }
+
+    document.getElementById('cntTweets').textContent  = ALL_TWEETS.length;
+    document.getElementById('cntReplies').textContent = ALL_REPLIES.length;
+    populateDropdowns();
+
+  } catch (e) {
+    document.getElementById('loaderArea').innerHTML =
+      `<span style="color:var(--red)">⚠ Failed to load: ${e.message}</span>`;
+    return;
+  }
+
+  document.getElementById('loaderArea').style.display = 'none';
+  document.getElementById('panel-' + TAB).classList.add('active');
+  filter();
+
+  // Background KV sync after render
+  syncFromKV();
+}
+
+// ─────────────────────────────────────────────
+//  DROPDOWNS + FILTERING
+// ─────────────────────────────────────────────
+function populateDropdowns() {
+  const handles = [...new Set([
+    ...ALL_TWEETS.map(t => t.handle),
+    ...ALL_REPLIES.map(r => r.replier),
+  ])].sort();
+  const topics = [...new Set([
+    ...ALL_TWEETS.flatMap(t => t.topics),
+    ...ALL_REPLIES.flatMap(r => r.topics),
+  ])].sort();
+
+  document.getElementById('fHandle').innerHTML =
+    '<option value="">All accounts</option>' +
+    handles.map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join('');
+  document.getElementById('fTopic').innerHTML =
+    '<option value="">All topics</option>' +
+    topics.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+}
+
+function switchTab(tab) {
+  TAB = tab;
+  document.getElementById('tabTweets').classList.toggle('active', tab === 'tweets');
+  document.getElementById('tabReplies').classList.toggle('active', tab === 'replies');
+  document.getElementById('panel-tweets').classList.toggle('active', tab === 'tweets');
+  document.getElementById('panel-replies').classList.toggle('active', tab === 'replies');
+  filter();
+}
+
+function toggleQ() {
+  Q_ONLY = !Q_ONLY;
+  document.getElementById('btnQ').classList.toggle('active', Q_ONLY);
+  filter();
+}
+
+function clearFilters() {
+  ['fHandle','fTopic','fDate','fStatus','fSearch'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  Q_ONLY = false;
+  document.getElementById('btnQ').classList.remove('active');
+  filter();
+}
+
+function getFilters() {
+  return {
+    handle: document.getElementById('fHandle').value,
+    topic:  document.getElementById('fTopic').value,
+    days:   parseInt(document.getElementById('fDate').value) || 0,
+    status: document.getElementById('fStatus').value,
+    q:      document.getElementById('fSearch').value.toLowerCase().trim(),
+  };
+}
+
+function itemId(item, isReply) {
+  return isReply ? (item.answer_link || item.question_text.slice(0,40)) : item.link;
+}
+
+function matchItem(item, f, isReply) {
+  const cutoff = f.days ? new Date(Date.now() - f.days * 86400000) : null;
+  const who = isReply ? item.replier : item.handle;
+  if (f.handle && who !== f.handle) return false;
+  if (f.topic  && !item.topics.includes(f.topic)) return false;
+  if (cutoff   && item.date_str && new Date(item.date_str) < cutoff) return false;
+  if (f.q) {
+    const hay = isReply
+      ? `${item.question_text} ${item.answer_text} ${item.replier}`.toLowerCase()
+      : `${item.text} ${item.handle}`.toLowerCase();
+    if (!hay.includes(f.q)) return false;
+  }
+  if (Q_ONLY && !isReply && !item.is_question) return false;
+  if (f.status) {
+    const s = getStatus(itemId(item, isReply));
+    if (s !== f.status) return false;
+  }
+  return true;
+}
+
+function filter() {
+  const f = getFilters();
+  if (TAB === 'tweets') {
+    const filt = ALL_TWEETS.filter(t => matchItem(t, f, false));
+    renderTweets(filt);
+    document.getElementById('sVisible').textContent = filt.length;
+    document.getElementById('sTotal').textContent   = ALL_TWEETS.length;
+  } else {
+    const filt = ALL_REPLIES.filter(r => matchItem(r, f, true));
+    renderReplies(filt);
+    document.getElementById('sVisible').textContent = filt.length;
+    document.getElementById('sTotal').textContent   = ALL_REPLIES.length;
+  }
+}
+
+// ─────────────────────────────────────────────
+//  RENDERING
+// ─────────────────────────────────────────────
+function tags(topics) {
+  return topics.map(t => `<span class="tag">${esc(t)}</span>`).join('');
+}
+
+function statusPillHtml(id) {
+  const s = getStatus(id);
+  let cls = '', label = '○ Mark';
+  if (s === 'read')   { cls = 's-read';   label = '✅ Read'; }
+  if (s === 'review') { cls = 's-review'; label = '🟡 Review later'; }
+  return `
+    <span class="status-pill ${cls}" onclick="event.stopPropagation(); openMenu('${esc(id)}', this)">${label}</span>
+    <div class="status-menu" id="menu_${esc(id)}">
+      <button class="sm-item" data-s="unread"  onclick="pickStatus('${esc(id)}','unread')"><span class="sm-dot d-unread"></span>Unread</button>
+      <button class="sm-item" data-s="review"  onclick="pickStatus('${esc(id)}','review')"><span class="sm-dot d-review"></span>Review later</button>
+      <button class="sm-item" data-s="read"    onclick="pickStatus('${esc(id)}','read')"><span class="sm-dot d-read"></span>Mark as read</button>
+    </div>`;
+}
+
+function cardStatusClass(id) {
+  const s = getStatus(id);
+  return s !== 'unread' ? 'status-' + s : '';
+}
+
+function renderTweets(list) {
+  const el = document.getElementById('gridTweets');
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">🔍</div><div class="empty-title">No tweets match</div><div>Try clearing filters</div></div>`;
+    return;
+  }
+  el.innerHTML = list.map(t => {
+    const id = t.link;
+    return `
+    <div class="card ${t.is_question ? 'is-q' : ''} ${cardStatusClass(id)}" id="card_${esc(id)}">
+      <div class="card-hdr">
+        <a class="handle" href="https://twitter.com/${esc(t.handle)}" target="_blank" rel="noopener">${esc(t.handle)}</a>
+        <div class="hdr-right">
+          <span class="date">${esc(t.date_display)}</span>
+          ${statusPillHtml(id)}
+        </div>
+      </div>
+      <div class="card-text">${esc(t.text)}</div>
+      <div class="card-ftr">
+        <div class="tags">${tags(t.topics)}${t.is_question ? '<span class="q-badge">Q&amp;A</span>' : ''}</div>
+        <a class="open-link" href="${esc(t.link)}" target="_blank" rel="noopener">Open ↗</a>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderReplies(list) {
+  const el = document.getElementById('listReplies');
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">💬</div><div class="empty-title">No replies match</div><div>Try clearing filters</div></div>`;
+    return;
+  }
+  el.innerHTML = list.map(r => {
+    const id = r.answer_link || r.question_text.slice(0, 40);
+    return `
+    <div class="qa-card ${cardStatusClass(id)}" id="card_${esc(id)}">
+      <div class="qa-q">
+        <div class="qa-q-hdr">
+          <span class="qa-q-who">${esc(r.question_author)}</span>
+          <div class="hdr-right">
+            <span class="date">${esc(r.date_display)}</span>
+            ${statusPillHtml(id)}
+          </div>
+        </div>
+        <div class="qa-q-text">${esc(r.question_text)}</div>
+      </div>
+      <div class="qa-a">
+        <div class="qa-a-hdr">
+          <a class="qa-a-who" href="https://twitter.com/${esc(r.replier)}" target="_blank" rel="noopener">${esc(r.replier)}</a>
+          <div class="tags">${tags(r.topics)}</div>
+        </div>
+        <div class="qa-a-text">${esc(r.answer_text)}</div>
+        <div class="qa-ftr">
+          <span></span>
+          <a class="open-link" href="${esc(r.answer_link)}" target="_blank" rel="noopener">View thread ↗</a>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Boot
+loadData();
+</script>
+</body>
+</html>
