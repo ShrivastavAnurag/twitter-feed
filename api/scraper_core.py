@@ -226,13 +226,26 @@ def scrape_user(handle: str, verbose: bool = False) -> tuple:
 
 
 def scrape_all(verbose: bool = False) -> tuple:
-    """Scrape all FOLLOWEES. Returns (all_tweets, all_replies)."""
+    """Scrape all FOLLOWEES in parallel. Returns (all_tweets, all_replies)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     all_tweets, all_replies = [], []
-    for handle in FOLLOWEES:
+
+    def _scrape(handle):
         if verbose:
-            print(f"\n→ @{handle}")
-        t, r = scrape_user(handle, verbose=verbose)
-        all_tweets.extend(t)
-        all_replies.extend(r)
-        time.sleep(1)
+            print(f"→ @{handle}", flush=True)
+        return scrape_user(handle, verbose=verbose)
+
+    # 5 workers — enough parallelism without hammering Nitter
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_scrape, h): h for h in FOLLOWEES}
+        for future in as_completed(futures):
+            try:
+                t, r = future.result()
+                all_tweets.extend(t)
+                all_replies.extend(r)
+            except Exception as e:
+                if verbose:
+                    print(f"  ⚠ {futures[future]}: {e}", flush=True)
+
     return all_tweets, all_replies
