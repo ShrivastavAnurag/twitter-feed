@@ -1,6 +1,8 @@
 """
-scraper_core.py  —  Twitter API v2 based scraper
-Uses Bearer Token (read-only, free tier — 500k tweets/month)
+scraper_core.py  —  Twitter API v2 scraper
+- Batch user ID lookup (1 API call for all users)
+- Parallel tweet fetching (10 workers)
+- 7-day window, 50 tweets per user
 """
 
 import os
@@ -12,7 +14,7 @@ from typing import Optional
 import requests
 
 # ─────────────────────────────────────────────
-#  FOLLOWEES  — add / remove handles here
+#  FOLLOWEES
 # ─────────────────────────────────────────────
 FOLLOWEES = [
     "tiwarisuhani_11",
@@ -27,7 +29,6 @@ FOLLOWEES = [
     "0xlelouch_",
 ]
 
-# Max tweets to fetch per user (max 100 per request on free tier)
 MAX_TWEETS_PER_USER = 50
 
 # ─────────────────────────────────────────────
@@ -67,48 +68,42 @@ def is_question(text: str) -> bool:
 
 
 # ─────────────────────────────────────────────
-#  TWITTER API v2 CLIENT
+#  TWITTER API v2 HELPERS
 # ─────────────────────────────────────────────
 API_BASE = "https://api.twitter.com/2"
 
 
-def _bearer() -> str:
+def _headers() -> dict:
     token = os.environ.get("TWITTER_BEARER_TOKEN", "")
     if not token:
         raise RuntimeError("TWITTER_BEARER_TOKEN env var not set")
-    return token
+    return {"Authorization": f"Bearer {token}"}
 
 
-def _headers() -> dict:
-    return {"Authorization": f"Bearer {_bearer()}"}
-
-
-def _get(path: str, params: dict) -> Optional[dict]:
-    """Make a GET request to Twitter API v2. Returns JSON or None on error."""
-    try:
-        r = requests.get(
-            f"{API_BASE}{path}",
-            headers=_headers(),
-            params=params,
-            timeout=15,
-        )
-        if r.status_code == 429:
-            # Rate limited — wait and retry once
-            reset = int(r.headers.get("x-rate-limit-reset", time.time() + 60))
-            wait  = max(reset - int(time.time()), 5)
-            print(f"  Rate limited, waiting {wait}s…", flush=True)
-            time.sleep(min(wait, 30))
-            r = requests.get(f"{API_BASE}{path}", headers=_headers(), params=params, timeout=15)
-        if r.status_code == 200:
-            return r.json()
-        print(f"  API error {r.status_code}: {r.text[:200]}", flush=True)
-    except Exception as e:
-        print(f"  Request error: {e}", flush=True)
+def _get(path: str, params: dict, retries: int = 1) -> Optional[dict]:
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(
+                f"{API_BASE}{path}",
+                headers=_headers(),
+                params=params,
+                timeout=20,
+            )
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code == 429:
+                reset = int(r.headers.get("x-rate-limit-reset", time.time() + 16))
+                wait  = min(max(reset - int(time.time()), 5), 30)
+                print(f"  Rate limited, waiting {wait}s", flush=True)
+                time.sleep(wait)
+                continue
+            print(f"  HTTP {r.status_code} for {path}: {r.text[:150]}", flush=True)
+        except Exception as e:
+            print(f"  Request error: {e}", flush=True)
     return None
 
 
 def _format_date(iso: str) -> tuple:
-    """Convert ISO 8601 → (YYYY-MM-DD, DD Mon YYYY)"""
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d"), dt.strftime("%d %b %Y")
@@ -116,86 +111,66 @@ def _format_date(iso: str) -> tuple:
         return "", iso[:10]
 
 
-def _tweet_url(username: str, tweet_id: str) -> str:
-    return f"https://twitter.com/{username}/status/{tweet_id}"
-
-
 # ─────────────────────────────────────────────
-#  USER LOOKUP
+#  BATCH USER ID LOOKUP  (1 API call for all users)
 # ─────────────────────────────────────────────
-def _get_user_id(username: str) -> Optional[str]:
-    data = _get(f"/users/by/username/{username}", {"user.fields": "id"})
-    if data and "data" in data:
-        return data["data"]["id"]
-    return None
-
-
-# ─────────────────────────────────────────────
-#  TWEET FETCHING
-# ─────────────────────────────────────────────
-TWEET_FIELDS  = "created_at,text,referenced_tweets,in_reply_to_user_id"
-TWEET_EXPANSIONS = "referenced_tweets.id,in_reply_to_user_id"
-USER_FIELDS   = "username"
-
-def _fetch_user_tweets(user_id: str, username: str) -> tuple:
+def _batch_user_ids(usernames: list) -> dict:
     """
-    Fetch recent tweets + replies for a user.
-    Returns (tweets_list, replies_list)
+    Returns { username_lower: user_id } for all found users.
+    Twitter allows up to 100 usernames per request.
     """
-    tweets_out  = []
-    replies_out = []
+    result = {}
+    # Process in chunks of 100
+    for i in range(0, len(usernames), 100):
+        chunk = usernames[i:i+100]
+        data  = _get("/users/by", {"usernames": ",".join(chunk), "user.fields": "id,username"})
+        if data and "data" in data:
+            for u in data["data"]:
+                result[u["username"].lower()] = u["id"]
+    return result
 
-    # Fetch last 7 days (free tier limit)
+
+# ─────────────────────────────────────────────
+#  TWEET FETCHING  (per user)
+# ─────────────────────────────────────────────
+def _fetch_tweets(user_id: str, username: str, verbose: bool = False) -> tuple:
+    tweets_out, replies_out = [], []
+
     start_time = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    params = {
+    data = _get(f"/users/{user_id}/tweets", {
         "max_results":  MAX_TWEETS_PER_USER,
-        "tweet.fields": TWEET_FIELDS,
-        "expansions":   TWEET_EXPANSIONS,
-        "user.fields":  USER_FIELDS,
+        "tweet.fields": "created_at,text,referenced_tweets,in_reply_to_user_id",
+        "expansions":   "referenced_tweets.id,in_reply_to_user_id",
+        "user.fields":  "username",
         "start_time":   start_time,
-        "exclude":      "retweets",          # skip RTs
-    }
+        "exclude":      "retweets",
+    })
 
-    data = _get(f"/users/{user_id}/tweets", params)
     if not data or "data" not in data:
         return [], []
 
-    # Build a map of referenced tweet id → text (for reply context)
-    ref_map = {}
-    if "includes" in data and "tweets" in data["includes"]:
-        for ref in data["includes"]["tweets"]:
-            ref_map[ref["id"]] = ref.get("text", "")
-
-    # Build author map from expansions (for reply question authors)
-    user_map = {}
-    if "includes" in data and "users" in data["includes"]:
-        for u in data["includes"]["users"]:
-            user_map[u["id"]] = u.get("username", "unknown")
+    # Map referenced tweet id → text
+    ref_map  = {t["id"]: t.get("text","") for t in data.get("includes",{}).get("tweets",[])}
+    # Map user_id → username (for reply question authors)
+    user_map = {u["id"]: u.get("username","unknown") for u in data.get("includes",{}).get("users",[])}
 
     for tw in data["data"]:
-        text       = tw.get("text", "").strip()
-        tweet_id   = tw["id"]
-        created_at = tw.get("created_at", "")
-        date_s, date_d = _format_date(created_at)
-        link = _tweet_url(username, tweet_id)
+        text     = tw.get("text","").strip()
+        tweet_id = tw["id"]
+        date_s, date_d = _format_date(tw.get("created_at",""))
+        link     = f"https://twitter.com/{username}/status/{tweet_id}"
+        refs     = tw.get("referenced_tweets", [])
+        replied_to_uid = tw.get("in_reply_to_user_id")
+        is_reply = any(r["type"] == "replied_to" for r in refs)
 
-        refs = tw.get("referenced_tweets", [])
-        replied_to_id   = tw.get("in_reply_to_user_id")
-        is_reply_tweet  = any(r["type"] == "replied_to" for r in refs)
-
-        if is_reply_tweet and replied_to_id and replied_to_id != user_id:
-            # This is a reply to someone else — treat as Q&A
-            # Find the original tweet text
+        if is_reply and replied_to_uid and replied_to_uid != user_id:
+            # Reply to someone else → Q&A pair
             orig_id   = next((r["id"] for r in refs if r["type"] == "replied_to"), None)
             orig_text = ref_map.get(orig_id, "") if orig_id else ""
-            q_author  = user_map.get(replied_to_id, "unknown")
-
-            # Strip the leading @mention from the reply text
-            answer = re.sub(r'^@\w+\s*', '', text).strip()
-
+            q_author  = user_map.get(replied_to_uid, "unknown")
+            answer    = re.sub(r'^@\w+\s*', '', text).strip()
             if orig_text and len(answer) > 20:
-                topics = detect_topics(orig_text + " " + answer)
                 replies_out.append({
                     "replier":         username,
                     "question_author": q_author,
@@ -204,24 +179,25 @@ def _fetch_user_tweets(user_id: str, username: str) -> tuple:
                     "answer_link":     link,
                     "date_str":        date_s,
                     "date_display":    date_d,
-                    "topics":          topics,
+                    "topics":          detect_topics(orig_text + " " + answer),
                 })
             continue
 
-        # Regular tweet (not a reply to someone else)
         if text.startswith("@"):
-            continue   # skip @mentions that aren't captured as replies
+            continue
 
-        topics = detect_topics(text)
         tweets_out.append({
-            "handle":       username,
-            "text":         text,
-            "link":         link,
-            "date_str":     date_s,
-            "date_display": date_d,
-            "topics":       topics,
-            "is_question":  is_question(text),
+            "handle":      username,
+            "text":        text,
+            "link":        link,
+            "date_str":    date_s,
+            "date_display":date_d,
+            "topics":      detect_topics(text),
+            "is_question": is_question(text),
         })
+
+    if verbose:
+        print(f"  @{username}: {len(tweets_out)} tweets, {len(replies_out)} replies", flush=True)
 
     return tweets_out, replies_out
 
@@ -230,29 +206,38 @@ def _fetch_user_tweets(user_id: str, username: str) -> tuple:
 #  PUBLIC API
 # ─────────────────────────────────────────────
 def scrape_user(handle: str, verbose: bool = False) -> tuple:
-    """Returns (tweets, replies) for one handle."""
-    if verbose:
-        print(f"  → @{handle}", flush=True)
-
-    user_id = _get_user_id(handle)
-    if not user_id:
+    uid_map = _batch_user_ids([handle])
+    uid     = uid_map.get(handle.lower())
+    if not uid:
         if verbose:
-            print(f"    ⚠ could not find user @{handle}", flush=True)
+            print(f"  ⚠ @{handle} not found", flush=True)
         return [], []
-
-    tweets, replies = _fetch_user_tweets(user_id, handle)
-    if verbose:
-        print(f"    ✓ {len(tweets)} tweets, {len(replies)} replies", flush=True)
-    return tweets, replies
+    return _fetch_tweets(uid, handle, verbose)
 
 
 def scrape_all(verbose: bool = False) -> tuple:
-    """Scrape all FOLLOWEES in parallel. Returns (all_tweets, all_replies)."""
+    """
+    1. One batch API call to resolve all usernames → IDs
+    2. Parallel tweet fetching with 10 workers
+    """
     all_tweets, all_replies = [], []
 
-    # 3 workers — avoid hammering Twitter API rate limits
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {executor.submit(scrape_user, h, verbose): h for h in FOLLOWEES}
+    if verbose:
+        print(f"Resolving {len(FOLLOWEES)} user IDs in one batch call…", flush=True)
+
+    uid_map = _batch_user_ids(FOLLOWEES)
+
+    if verbose:
+        print(f"Found {len(uid_map)}/{len(FOLLOWEES)} users. Fetching tweets in parallel…", flush=True)
+
+    def _fetch(handle):
+        uid = uid_map.get(handle.lower())
+        if not uid:
+            return [], []
+        return _fetch_tweets(uid, handle, verbose)
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_fetch, h): h for h in FOLLOWEES}
         for future in as_completed(futures):
             try:
                 t, r = future.result()

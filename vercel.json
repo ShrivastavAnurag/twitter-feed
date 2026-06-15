@@ -1,4 +1,3 @@
-
 {
   "crons": [
     {
@@ -7,8 +6,14 @@
     }
   ],
   "functions": {
-    "api/*.py": {
-      "maxDuration": 60
+    "api/scrape.py": {
+      "maxDuration": 300
+    },
+    "api/tweets.py": {
+      "maxDuration": 15
+    },
+    "api/status.py": {
+      "maxDuration": 15
     }
   },
   "rewrites": [
