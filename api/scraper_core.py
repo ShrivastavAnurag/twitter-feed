@@ -1,11 +1,13 @@
 """
-scraper_core.py  —  shared scraping logic used by both api/scrape.py and local runner
+scraper_core.py  —  Twitter API v2 based scraper
+Uses Bearer Token (read-only, free tier — 500k tweets/month)
 """
 
+import os
 import re
 import time
-import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 import requests
 
@@ -25,17 +27,8 @@ FOLLOWEES = [
     "0xlelouch_",
 ]
 
-NITTER_INSTANCES = [
-    "https://nitter.poast.org",
-    "https://nitter.net",
-    "https://nitter.1d4.us",
-    "https://nitter.kavin.rocks",
-    "https://nitter.it",
-    "https://n.l5.ca",
-    "https://nitter.privacydev.net",
-]
-
-MAX_TWEETS_PER_USER = 40
+# Max tweets to fetch per user (max 100 per request on free tier)
+MAX_TWEETS_PER_USER = 50
 
 # ─────────────────────────────────────────────
 #  TOPIC DETECTION
@@ -63,9 +56,6 @@ QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
-AT_START = re.compile(r'^@\w+')
-REPLY_RE = re.compile(r'^R to @(\w+):\s*(.*)', re.DOTALL)
-
 
 def detect_topics(text: str) -> list:
     found = [t for t, p in TOPIC_RULES if re.search(p, text, re.IGNORECASE)]
@@ -77,121 +67,163 @@ def is_question(text: str) -> bool:
 
 
 # ─────────────────────────────────────────────
-#  HTTP + RSS HELPERS
+#  TWITTER API v2 CLIENT
 # ─────────────────────────────────────────────
-_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
-    "Accept": "application/rss+xml,application/xml,text/xml,*/*",
-}
+API_BASE = "https://api.twitter.com/2"
 
 
-def _nitter_to_twitter(link: str) -> str:
-    link = link.replace("nitter.net", "twitter.com")
-    for inst in NITTER_INSTANCES:
-        domain = inst.replace("https://", "").replace("http://", "")
-        link = link.replace(domain, "twitter.com")
-    return link
+def _bearer() -> str:
+    token = os.environ.get("TWITTER_BEARER_TOKEN", "")
+    if not token:
+        raise RuntimeError("TWITTER_BEARER_TOKEN env var not set")
+    return token
 
 
-def _fetch_rss(handle: str, instance: str, with_replies: bool = False) -> Optional[str]:
-    suffix = "/with_replies" if with_replies else ""
-    url = f"{instance}/{handle}{suffix}/rss"
+def _headers() -> dict:
+    return {"Authorization": f"Bearer {_bearer()}"}
+
+
+def _get(path: str, params: dict) -> Optional[dict]:
+    """Make a GET request to Twitter API v2. Returns JSON or None on error."""
     try:
-        r = requests.get(url, headers=_HEADERS, timeout=12)
-        if r.status_code == 200 and "<rss" in r.text:
-            return r.text
-    except Exception:
-        pass
+        r = requests.get(
+            f"{API_BASE}{path}",
+            headers=_headers(),
+            params=params,
+            timeout=15,
+        )
+        if r.status_code == 429:
+            # Rate limited — wait and retry once
+            reset = int(r.headers.get("x-rate-limit-reset", time.time() + 60))
+            wait  = max(reset - int(time.time()), 5)
+            print(f"  Rate limited, waiting {wait}s…", flush=True)
+            time.sleep(min(wait, 30))
+            r = requests.get(f"{API_BASE}{path}", headers=_headers(), params=params, timeout=15)
+        if r.status_code == 200:
+            return r.json()
+        print(f"  API error {r.status_code}: {r.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"  Request error: {e}", flush=True)
     return None
 
 
-def _parse_date(item) -> tuple:
-    s = item.findtext("pubDate", "").strip()
-    for fmt in ("%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S +0000"):
-        try:
-            d = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-            return d.strftime("%Y-%m-%d"), d.strftime("%d %b %Y")
-        except ValueError:
-            pass
-    return "", s[:16] if s else "Unknown"
+def _format_date(iso: str) -> tuple:
+    """Convert ISO 8601 → (YYYY-MM-DD, DD Mon YYYY)"""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d"), dt.strftime("%d %b %Y")
+    except Exception:
+        return "", iso[:10]
 
 
-def _clean(html_text: str) -> str:
-    t = re.sub(r"<[^>]+>", " ", html_text)
-    return re.sub(r"\s+", " ", t).strip()
-
-
-def _item_text(item) -> str:
-    title = item.findtext("title", "").strip()
-    desc  = _clean(item.findtext("description", ""))
-    return desc if len(desc) > len(title) else title
+def _tweet_url(username: str, tweet_id: str) -> str:
+    return f"https://twitter.com/{username}/status/{tweet_id}"
 
 
 # ─────────────────────────────────────────────
-#  PARSERS
+#  USER LOOKUP
 # ─────────────────────────────────────────────
-def _parse_tweets(xml_text: str, handle: str) -> list:
-    out = []
-    try:
-        root    = ET.fromstring(xml_text)
-        channel = root.find("channel")
-        if channel is None:
-            return []
-        for item in channel.findall("item")[:MAX_TWEETS_PER_USER]:
-            text = _item_text(item)
-            if text.startswith("RT @") or AT_START.match(text):
-                continue
-            link       = _nitter_to_twitter(item.findtext("link", "").strip())
-            date_s, date_d = _parse_date(item)
-            out.append({
-                "handle":       handle,
-                "text":         text,
-                "link":         link,
-                "date_str":     date_s,
-                "date_display": date_d,
-                "topics":       detect_topics(text),
-                "is_question":  is_question(text),
-            })
-    except ET.ParseError:
-        pass
-    return out
+def _get_user_id(username: str) -> Optional[str]:
+    data = _get(f"/users/by/username/{username}", {"user.fields": "id"})
+    if data and "data" in data:
+        return data["data"]["id"]
+    return None
 
 
-def _parse_replies(xml_text: str, replier: str) -> list:
-    out = []
-    try:
-        root    = ET.fromstring(xml_text)
-        channel = root.find("channel")
-        if channel is None:
-            return []
-        for item in channel.findall("item")[:MAX_TWEETS_PER_USER]:
-            title = item.findtext("title", "").strip()
-            m = REPLY_RE.match(title)
-            if not m:
-                continue
-            q_author = m.group(1)
-            q_text   = m.group(2).strip()
-            if q_author.lower() == replier.lower():
-                continue                         # skip self-replies
-            answer = re.sub(r'^@\w+\s*', '', _clean(item.findtext("description", ""))).strip()
-            if len(answer) < 20:
-                continue
-            link       = _nitter_to_twitter(item.findtext("link", "").strip())
-            date_s, date_d = _parse_date(item)
-            topics = detect_topics(q_text + " " + answer)
-            out.append({
-                "replier":         replier,
-                "question_author": q_author,
-                "question_text":   q_text,
-                "answer_text":     answer,
-                "answer_link":     link,
-                "date_str":        date_s,
-                "date_display":    date_d,
-                "topics":          topics,
-            })
-    except ET.ParseError:
-        pass
-    return out
+# ─────────────────────────────────────────────
+#  TWEET FETCHING
+# ─────────────────────────────────────────────
+TWEET_FIELDS  = "created_at,text,referenced_tweets,in_reply_to_user_id"
+TWEET_EXPANSIONS = "referenced_tweets.id,in_reply_to_user_id"
+USER_FIELDS   = "username"
+
+def _fetch_user_tweets(user_id: str, username: str) -> tuple:
+    """
+    Fetch recent tweets + replies for a user.
+    Returns (tweets_list, replies_list)
+    """
+    tweets_out  = []
+    replies_out = []
+
+    # Fetch last 7 days (free tier limit)
+    start_time = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    params = {
+        "max_results":  MAX_TWEETS_PER_USER,
+        "tweet.fields": TWEET_FIELDS,
+        "expansions":   TWEET_EXPANSIONS,
+        "user.fields":  USER_FIELDS,
+        "start_time":   start_time,
+        "exclude":      "retweets",          # skip RTs
+    }
+
+    data = _get(f"/users/{user_id}/tweets", params)
+    if not data or "data" not in data:
+        return [], []
+
+    # Build a map of referenced tweet id → text (for reply context)
+    ref_map = {}
+    if "includes" in data and "tweets" in data["includes"]:
+        for ref in data["includes"]["tweets"]:
+            ref_map[ref["id"]] = ref.get("text", "")
+
+    # Build author map from expansions (for reply question authors)
+    user_map = {}
+    if "includes" in data and "users" in data["includes"]:
+        for u in data["includes"]["users"]:
+            user_map[u["id"]] = u.get("username", "unknown")
+
+    for tw in data["data"]:
+        text       = tw.get("text", "").strip()
+        tweet_id   = tw["id"]
+        created_at = tw.get("created_at", "")
+        date_s, date_d = _format_date(created_at)
+        link = _tweet_url(username, tweet_id)
+
+        refs = tw.get("referenced_tweets", [])
+        replied_to_id   = tw.get("in_reply_to_user_id")
+        is_reply_tweet  = any(r["type"] == "replied_to" for r in refs)
+
+        if is_reply_tweet and replied_to_id and replied_to_id != user_id:
+            # This is a reply to someone else — treat as Q&A
+            # Find the original tweet text
+            orig_id   = next((r["id"] for r in refs if r["type"] == "replied_to"), None)
+            orig_text = ref_map.get(orig_id, "") if orig_id else ""
+            q_author  = user_map.get(replied_to_id, "unknown")
+
+            # Strip the leading @mention from the reply text
+            answer = re.sub(r'^@\w+\s*', '', text).strip()
+
+            if orig_text and len(answer) > 20:
+                topics = detect_topics(orig_text + " " + answer)
+                replies_out.append({
+                    "replier":         username,
+                    "question_author": q_author,
+                    "question_text":   orig_text,
+                    "answer_text":     answer,
+                    "answer_link":     link,
+                    "date_str":        date_s,
+                    "date_display":    date_d,
+                    "topics":          topics,
+                })
+            continue
+
+        # Regular tweet (not a reply to someone else)
+        if text.startswith("@"):
+            continue   # skip @mentions that aren't captured as replies
+
+        topics = detect_topics(text)
+        tweets_out.append({
+            "handle":       username,
+            "text":         text,
+            "link":         link,
+            "date_str":     date_s,
+            "date_display": date_d,
+            "topics":       topics,
+            "is_question":  is_question(text),
+        })
+
+    return tweets_out, replies_out
 
 
 # ─────────────────────────────────────────────
@@ -199,46 +231,28 @@ def _parse_replies(xml_text: str, replier: str) -> list:
 # ─────────────────────────────────────────────
 def scrape_user(handle: str, verbose: bool = False) -> tuple:
     """Returns (tweets, replies) for one handle."""
-    tweets, replies = [], []
-    for instance in NITTER_INSTANCES:
+    if verbose:
+        print(f"  → @{handle}", flush=True)
+
+    user_id = _get_user_id(handle)
+    if not user_id:
         if verbose:
-            print(f"  {instance} / @{handle} ...", end=" ", flush=True)
-        # tweets
-        xml = _fetch_rss(handle, instance, with_replies=False)
-        if xml:
-            tweets = _parse_tweets(xml, handle)
-            if verbose:
-                print(f"✓ {len(tweets)} tweets", end="  ")
-        # replies (same instance — avoids re-negotiating a working one)
-        xml_r = _fetch_rss(handle, instance, with_replies=True)
-        if xml_r:
-            replies = _parse_replies(xml_r, handle)
-            if verbose:
-                print(f"✓ {len(replies)} replies", end="")
-        if verbose:
-            print()
-        if tweets or replies:
-            break
-        time.sleep(0.4)
-    if verbose and not tweets and not replies:
-        print(f"  ⚠  could not reach any Nitter instance for @{handle}")
+            print(f"    ⚠ could not find user @{handle}", flush=True)
+        return [], []
+
+    tweets, replies = _fetch_user_tweets(user_id, handle)
+    if verbose:
+        print(f"    ✓ {len(tweets)} tweets, {len(replies)} replies", flush=True)
     return tweets, replies
 
 
 def scrape_all(verbose: bool = False) -> tuple:
     """Scrape all FOLLOWEES in parallel. Returns (all_tweets, all_replies)."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     all_tweets, all_replies = [], []
 
-    def _scrape(handle):
-        if verbose:
-            print(f"→ @{handle}", flush=True)
-        return scrape_user(handle, verbose=verbose)
-
-    # 5 workers — enough parallelism without hammering Nitter
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_scrape, h): h for h in FOLLOWEES}
+    # 3 workers — avoid hammering Twitter API rate limits
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(scrape_user, h, verbose): h for h in FOLLOWEES}
         for future in as_completed(futures):
             try:
                 t, r = future.result()
